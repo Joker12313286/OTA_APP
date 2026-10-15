@@ -337,7 +337,7 @@
               <MiscControls>--no-multibyte-chars</MiscControls>
               <Define>USE_HAL_DRIVER,STM32F103xB</Define>
               <Undefine></Undefine>
-              <IncludePath>../Core/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F1xx/Include;../Drivers/CMSIS/Include;../BSP;../interface</IncludePath>
+              <IncludePath>../Core/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F1xx/Include;../Drivers/CMSIS/Include;../BSP;../interface;..\OTA</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -817,26 +817,6 @@
           <GroupName>interface</GroupName>
           <Files>
             <File>
-              <FileName>comm_interface.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\interface\comm_interface.c</FilePath>
-            </File>
-            <File>
-              <FileName>comm_interface.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>..\interface\comm_interface.h</FilePath>
-            </File>
-            <File>
-              <FileName>esp8266.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\interface\esp8266.c</FilePath>
-            </File>
-            <File>
-              <FileName>esp8266.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>..\interface\esp8266.h</FilePath>
-            </File>
-            <File>
               <FileName>esp8266_MQTT.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\interface\esp8266_MQTT.c</FilePath>
@@ -845,6 +825,21 @@
               <FileName>esp8266_MQTT.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\interface\esp8266_MQTT.h</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>OTA</GroupName>
+          <Files>
+            <File>
+              <FileName>OTA_Client.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\OTA\OTA_Client.c</FilePath>
+            </File>
+            <File>
+              <FileName>OTA_Client.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\OTA\OTA_Client.h</FilePath>
             </File>
           </Files>
         </Group>

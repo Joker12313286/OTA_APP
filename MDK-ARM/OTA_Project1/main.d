@@ -40,3 +40,4 @@ ota_project1\main.o: ../interface/esp8266_MQTT.h
 ota_project1\main.o: D:\cxdownload\01 Keil c51v959-\02 Keil MDK\ARM\ARMCC\Bin\..\include\string.h
 ota_project1\main.o: D:\cxdownload\01 Keil c51v959-\02 Keil MDK\ARM\ARMCC\Bin\..\include\stdio.h
 ota_project1\main.o: D:\cxdownload\01 Keil c51v959-\02 Keil MDK\ARM\ARMCC\Bin\..\include\stdlib.h
+ota_project1\main.o: ..\OTA\OTA_Client.h

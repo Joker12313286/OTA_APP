@@ -103,6 +103,7 @@
                 "d:\\STM32F103C8T6_Project\\OTA\\OTA_APP\\Drivers\\CMSIS\\Include",
                 "d:\\STM32F103C8T6_Project\\OTA\\OTA_APP\\BSP",
                 "d:\\STM32F103C8T6_Project\\OTA\\OTA_APP\\interface",
+                "d:\\STM32F103C8T6_Project\\OTA\\OTA_APP\\OTA",
                 "D:\\cxdownload\\01 Keil c51v959-\\02 Keil MDK\\ARM\\ARMCC\\include",
                 "D:\\cxdownload\\01 Keil c51v959-\\02 Keil MDK\\ARM\\ARMCC\\include\\rw",
                 "d:\\STM32F103C8T6_Project\\OTA\\OTA_APP\\MDK-ARM",

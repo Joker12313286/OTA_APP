@@ -3,39 +3,87 @@
 #include "OLED.h"
 
 extern UART_HandleTypeDef huart1;
+volatile uint32_t g_rx_cb_cnt = 0;
 
+/* ==================== 多缓冲环形队列 ==================== */
+#define DMA_BUF_NUM  4
 
-/* DMA 接收缓冲，仅用于异步 MQTT 消息 */
+static uint8_t  s_dma_buf[DMA_BUF_NUM][MQTT_BUFF_SIZE] = {0};
+static volatile uint8_t  s_dma_widx  = 0;       /* DMA 当前写哪块 */
+static volatile uint8_t  s_dma_ridx  = 0;       /* 主循环读哪块 */
+static volatile uint16_t s_dma_len[DMA_BUF_NUM] = {0};
+static volatile uint8_t  s_ready_cnt = 0;       /* 队列中待处理块数 */
+
+/* 累积缓冲 */
+static uint8_t  s_accum[MQTT_BUFF_SIZE * 2] = {0};
+static uint16_t s_accum_len = 0;
+
+/* 阻塞 AT 命令用的临时缓冲（独立） */
 static uint8_t           s_rx_buff[MQTT_BUFF_SIZE] = {0};
 static volatile uint16_t s_rx_len   = 0;
 static volatile uint8_t  s_rx_ready = 0;
 
-/* 对外暴露：最近一次收到的 MQTT 数据 */
+/* 对外暴露 */
 char ESP_MQTT_LastData[MQTT_DATA_SIZE]   = {0};
 char ESP_MQTT_LastTopic[MQTT_TOPIC_SIZE] = {0};
 int  ESP_MQTT_LastDataLen = 0;
 
 /* ====================== UART 回调 ======================
- * 只标记，不重启 DMA（重启由上层统一管理，避免状态打架）
+利用多缓冲 DMA + 空闲中断，接收数据到环形队列中，主循环再处理
  * ====================================================== */
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
-    if (huart == &huart1)
+    if (huart != &huart1) return;
+    g_rx_cb_cnt++;
+
+    /* 当前块写完，入队 */
+    s_dma_len[s_dma_widx] = Size;
+    s_ready_cnt++;
+
+    /* 队列满：丢最老的一块（保护当前已经写入的数据） */
+    if (s_ready_cnt > DMA_BUF_NUM)
     {
-        s_rx_len   = Size;
-        s_rx_ready = 1;
+        s_ready_cnt = DMA_BUF_NUM;
+        s_dma_ridx  = (s_dma_ridx + 1) % DMA_BUF_NUM;
     }
+
+    /* 切到下一块，重启 DMA */
+    s_dma_widx = (s_dma_widx + 1) % DMA_BUF_NUM;
+    HAL_UARTEx_ReceiveToIdle_DMA(&huart1, s_dma_buf[s_dma_widx], MQTT_BUFF_SIZE);
 }
 
 /* ====================== 启动 DMA 接收（异步阶段用） ====================== */
 void ESP_MQTT_StartReceive(void)
 {
     HAL_UART_AbortReceive(&huart1);
-    HAL_Delay(10);          /* 给状态机恢复时间 */
-    memset(s_rx_buff, 0, MQTT_BUFF_SIZE);
-    s_rx_len   = 0;
-    s_rx_ready = 0;
-    HAL_UARTEx_ReceiveToIdle_DMA(&huart1, s_rx_buff, MQTT_BUFF_SIZE);
+    HAL_Delay(10);
+
+    memset(s_dma_buf, 0, sizeof(s_dma_buf));
+    s_dma_widx  = 0;
+    s_dma_ridx  = 0;
+    s_ready_cnt = 0;
+    s_accum_len = 0;
+
+    HAL_UARTEx_ReceiveToIdle_DMA(&huart1, s_dma_buf[s_dma_widx], MQTT_BUFF_SIZE);
+}
+
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+    if (huart != &huart1) return;
+
+    /* 清除所有错误标志 */
+    __HAL_UART_CLEAR_OREFLAG(huart);
+    __HAL_UART_CLEAR_PEFLAG(huart);
+    __HAL_UART_CLEAR_FEFLAG(huart);
+    __HAL_UART_CLEAR_NEFLAG(huart);
+
+    /* 重启 DMA，否则 UART 会永久停收 */
+    HAL_UARTEx_ReceiveToIdle_DMA(&huart1, s_dma_buf[s_dma_widx], MQTT_BUFF_SIZE);
+
+    /* 上报错误 */
+    char log[48];
+    sprintf(log, "{\"ev\":\"uart_err\",\"code\":%lu}", huart->ErrorCode);
+    ESP_MQTT_Publish("OTA/log", log, strlen(log));
 }
 
 /* ====================== 阻塞式 AT 命令交互 ====================== */
@@ -197,100 +245,180 @@ int ESP_MQTT_Init(void)
     if (ESP_MQTT_ConnectWIFI() != 0) return -2;
     if (ESP_MQTT_UserConfig()  != 0) return -3;
     if (ESP_MQTT_Connect()     != 0) return -4;
-    if (ESP_MQTT_Subscribe(MQTT_SUB_TOPIC) != 0) return -5;
+    if (ESP_MQTT_Subscribe(MQTT_SUB_TOPIC)      != 0) return -5;
+    if (ESP_MQTT_Subscribe(OTA_TOPIC_NOTIFY)    != 0) return -6;   /* "OTA/notify" */
+    if (ESP_MQTT_Subscribe(OTA_TOPIC_DATA)      != 0) return -7;   /* "OTA/data" */
 
     /* 所有 AT 交互完成，启动 DMA 进入异步消息接收阶段 */
     ESP_MQTT_StartReceive();
     return 0;
 }
 
-/* ====================== 解析 MQTT 订阅消息 ======================
- * 格式：+MQTTSUBRECV:<link_id>,"<topic>",<data_len>,<data>
- * ============================================================== */
-static int parse_MQTTSUBRECV(char *recv,
-                             char *topic, int  topic_size,
-                             char *data,  int  data_size,
-                             int  *data_len)
+/* ====================== 解析单条 +MQTTSUBRECV ======================
+ * 输入:  buf[0..buf_len-1]  原始缓冲
+ * 输出:  *consumed  本条消息占用的字节数（用于跳过继续找下一条）
+ *        topic / data / data_len
+ * 返回:  0=成功, -1=没有头部, -2=格式错或数据不全
+ *
+ * 注意：数据段是二进制，不能当字符串处理，全程用长度 + memcpy
+ * ==================================================================== */
+static int parse_one_mqttrecv(const uint8_t *buf, uint16_t buf_len,
+                              uint16_t *consumed,
+                              char *topic, int topic_size,
+                              uint8_t *data, int data_size,
+                              int *data_len)
 {
     const char *prefix = "+MQTTSUBRECV:";
-    char *p = strstr(recv, prefix);
-    if (!p) return -1;
+    const int  prefix_len = 12;   /* "+MQTTSUBRECV:" 共 12 字节 */
+    int pos = -1;
 
-    p += strlen(prefix);
-    p = strchr(p, ',');
-    if (!p) return -2;
-    p++;
+    /* 1) 找头部（用 memcmp，不用 strstr，避免数据里碰巧含 0x00 干扰） */
+    if (buf_len < prefix_len) return -1;
+    for (int i = 0; i <= (int)buf_len - prefix_len; i++)
+    {
+        if (memcmp(&buf[i], prefix, prefix_len) == 0)
+        {
+            pos = i;
+            break;
+        }
+    }
+    if (pos < 0) return -1;
 
-    if (*p != '"') return -3;
-    p++;
-    char *topic_end = strchr(p, '"');
-    if (!topic_end) return -4;
+    int cursor = pos + prefix_len;
 
-    int tlen = topic_end - p;
-    if (tlen >= topic_size) tlen = topic_size - 1;
-    memcpy(topic, p, tlen);
-    topic[tlen] = '\0';
+    /* 2) 跳过 link_id（形如 "0,"），找第一个逗号 */
+    while (cursor < buf_len && buf[cursor] != ',') cursor++;
+    if (cursor >= buf_len) return -2;
+    cursor++;
 
-    p = topic_end + 1;
-    if (*p != ',') return -5;
-    p++;
+    /* 3) 期望 '"' 开头的 topic */
+    if (cursor >= buf_len || buf[cursor] != '"') return -2;
+    cursor++;
+    int t_start = cursor;
+    while (cursor < buf_len && buf[cursor] != '"') cursor++;
+    if (cursor >= buf_len) return -2;
+    int t_len = cursor - t_start;
+    if (t_len >= topic_size) t_len = topic_size - 1;
+    memcpy(topic, &buf[t_start], t_len);
+    topic[t_len] = '\0';
+    cursor++;   /* 跳过收尾的 '"' */
 
-    int len = atoi(p);
-    p = strchr(p, ',');
-    if (!p) return -6;
-    p++;
+    /* 4) 期望 ',' */
+    if (cursor >= buf_len || buf[cursor] != ',') return -2;
+    cursor++;
 
-    if (len < 0 || len >= data_size) return -7;
+    /* 5) 解析 data_len（十进制数字） */
+    int len = 0;
+    while (cursor < buf_len && buf[cursor] >= '0' && buf[cursor] <= '9')
+    {
+        len = len * 10 + (buf[cursor] - '0');
+        cursor++;
+    }
+    if (cursor >= buf_len || buf[cursor] != ',') return -2;
+    cursor++;
 
-    memcpy(data, p, len);
-    data[len] = '\0';
+    /* 6) 数据段从 cursor 开始，长 len 字节 */
+    if (cursor + len > buf_len) return -2;   /* 数据不完整 */
+    if (len >= data_size)       return -2;   /* 目标缓冲太小 */
+
+    memcpy(data, &buf[cursor], len);
+    data[len] = '\0';    /* 便于调试打印；二进制处理时请用 *data_len */
+
     *data_len = len;
-
+    *consumed = cursor + len;
     return 0;
 }
+
 
 /* ====================== 轮询处理异步接收 ====================== */
 uint8_t ESP_MQTT_ProcessReceive(void)
 {
-    if (!s_rx_ready) return 0;
-
-    /* 拷贝一份，防止被下一包覆盖 */
-    uint8_t  temp[MQTT_BUFF_SIZE];
-    uint16_t len = s_rx_len;
-    if (len > MQTT_BUFF_SIZE) len = MQTT_BUFF_SIZE;
-    memcpy(temp, s_rx_buff, len);
-    temp[len] = '\0';
-
-    /* 清状态并重启 DMA */
-    s_rx_ready = 0;
-    s_rx_len   = 0;
-    memset(s_rx_buff, 0, MQTT_BUFF_SIZE);
-    HAL_UARTEx_ReceiveToIdle_DMA(&huart1, s_rx_buff, MQTT_BUFF_SIZE);
-
-    /* 解析是否含订阅消息 */
-    int data_len = 0;
-    int ret = parse_MQTTSUBRECV((char *)temp,
-                                ESP_MQTT_LastTopic, MQTT_TOPIC_SIZE,
-                                ESP_MQTT_LastData,  MQTT_DATA_SIZE,
-                                &data_len);
-    if (ret != 0)
+    /* 把队列里所有就绪块依次搬进累积缓冲 */
+    while (s_ready_cnt > 0)
     {
-        /* 不是订阅消息，是 AT 异步响应，忽略 */
-        return 0;
+        uint8_t  idx;
+        uint16_t len;
+
+        __disable_irq();
+        idx = s_dma_ridx;
+        len = s_dma_len[idx];
+        s_dma_ridx = (s_dma_ridx + 1) % DMA_BUF_NUM;
+        s_ready_cnt--;
+        __enable_irq();
+
+        if (len > MQTT_BUFF_SIZE) len = MQTT_BUFF_SIZE;
+
+        if (s_accum_len + len > sizeof(s_accum))
+        {
+            /* 累积缓冲溢出：清空（正常不该发生，说明主循环实在太慢） */
+            s_accum_len = 0;
+        }
+        memcpy(&s_accum[s_accum_len], s_dma_buf[idx], len);
+        s_accum_len += len;
     }
 
-    ESP_MQTT_LastDataLen = data_len;
+    if (s_accum_len == 0) return 0;
 
-    /* 调试显示 */
-    OLED_Clear();
-    OLED_ShowString(0,  0, "MQTT RECV:", OLED_8X16);
-    OLED_ShowString(0, 16, ESP_MQTT_LastTopic, OLED_8X16);
-    OLED_ShowString(0, 32, ESP_MQTT_LastData,  OLED_8X16);
-    char tmp[24];
-    sprintf(tmp, "Len:%d", data_len);
-    OLED_ShowString(0, 48, tmp, OLED_8X16);
-    OLED_Update();
+    /* 循环解析累积缓冲里所有完整的 +MQTTSUBRECV 帧 */
+    uint16_t offset = 0;
+    uint8_t  got_any = 0;
 
-    /* TODO: 接 OTA 时在这里调 W25Q64_PageProgram 写 flash */
-    return 1;
+    while (offset < s_accum_len)
+    {
+        uint16_t consumed = 0;
+        int data_len = 0;
+
+        int ret = parse_one_mqttrecv(&s_accum[offset],
+                                     s_accum_len - offset,
+                                     &consumed,
+                                     ESP_MQTT_LastTopic, MQTT_TOPIC_SIZE,
+                                     (uint8_t *)ESP_MQTT_LastData, MQTT_DATA_SIZE,
+                                     &data_len);
+
+        if (ret == -1)
+        {
+            /* 完全没有头部 —— 整段都是 AT 异步消息，丢弃 */
+            offset = s_accum_len;
+            break;
+        }
+        if (ret == -2)
+        {
+            /* 头部在，但数据不完整 —— 保留从 offset 开始的，等下次 */
+            break;
+        }
+
+        /* ---- 解析成功一条 ---- */
+        ESP_MQTT_LastDataLen = data_len;
+        got_any = 1;
+
+        /* 调试显示 */
+        OLED_Clear();
+        OLED_ShowString(0,  0, "MQTT RECV:", OLED_8X16);
+        OLED_ShowString(0, 16, ESP_MQTT_LastTopic, OLED_8X16);
+        char disp[17] = {0};
+        for (int j = 0; j < 16 && j < data_len; j++)
+            disp[j] = (ESP_MQTT_LastData[j] >= 32 && ESP_MQTT_LastData[j] < 127)
+                      ? ESP_MQTT_LastData[j] : '.';
+        OLED_ShowString(0, 32, disp, OLED_8X16);
+        char tmp[24];
+        sprintf(tmp, "Len:%d", data_len);
+        OLED_ShowString(0, 48, tmp, OLED_8X16);
+        OLED_Update();
+
+        /* TODO: 阶段2 完成后在这里调 OTA_Client_ParseMessage(...) */
+        OTA_Client_ParseMessage(ESP_MQTT_LastTopic,
+                        (uint8_t *)ESP_MQTT_LastData,
+                        ESP_MQTT_LastDataLen);
+        offset += consumed;
+    }
+
+    /* 把剩下的（未解析完的尾部）挪到缓冲开头 */
+    if (offset > 0)
+    {
+        uint16_t remain = s_accum_len - offset;
+        if (remain > 0) memmove(s_accum, &s_accum[offset], remain);
+        s_accum_len = remain;
+    }
+
+    return got_any;
 }

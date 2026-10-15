@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include "OLED.h"
+#include "OTA_Client.h"
 
 /* ======================== 用户配置 ======================== */
 #define WIFI_SSID          "REDMI K80"
@@ -29,6 +30,9 @@
 #define MQTT_BUFF_SIZE     2048
 #define MQTT_DATA_SIZE     1024
 #define MQTT_TOPIC_SIZE    64
+
+#define OTA_CHUNK_SIZE     256
+
 extern volatile uint32_t g_rx_cb_cnt;
 /* ======================== API 接口 ======================== */
 
@@ -61,6 +65,8 @@ uint8_t ESP_MQTT_ProcessReceive(void);
 
 /* ESP8266上电后的等待函数，避免其反馈出来的垃圾日志 */
 int ESP_MQTT_WaitReady(void);
+
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart);
 
 /* 最近一次解析出来的数据（供外部直接读） */
 extern char ESP_MQTT_LastData[MQTT_DATA_SIZE];

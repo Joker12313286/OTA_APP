@@ -25,9 +25,8 @@
 "ota_project1\oled_data.o"
 "ota_project1\w25q64.o"
 "ota_project1\ota_manager.o"
-"ota_project1\comm_interface.o"
-"ota_project1\esp8266.o"
 "ota_project1\esp8266_mqtt.o"
+"ota_project1\ota_client.o"
 --strict --scatter "OTA_Project1\OTA_APP.sct"
 --summary_stderr --info summarysizes --map --load_addr_map_info --xref --callgraph --symbols
 --info sizes --info totals --info unused --info veneers

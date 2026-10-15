@@ -31,6 +31,7 @@
 //#include "MyCAN.h"
 //#include "esp8266.h"
 #include "esp8266_MQTT.h"
+#include "OTA_Client.h"
 // #include "MyWIFI.h"
 /* USER CODE END Includes */
 
@@ -106,6 +107,7 @@ int main(void)
   W25Q64_Init();
   OLED_Init();
   OLED_Clear();
+  OTA_Client_Init();
 
 /*   //测试CAN
   MYCAN_Init();
@@ -135,8 +137,10 @@ int main(void)
 
     //测试MQTT
     int r = ESP_MQTT_Init();
-OLED_Printf(0, 0, OLED_8X16, "MQTT init: %d", r);
-OLED_Update();
+    OLED_Printf(0, 0, OLED_8X16, "MQTT init: %d", r);
+    OLED_Update();
+
+    //uint16_t i = 0;
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -148,12 +152,16 @@ OLED_Update();
     // OLED_Update();
 
     ESP_MQTT_ProcessReceive();
-
     /* 想主动发消息就调这个（字符串） */
     //ESP_MQTT_Publish(MQTT_PUB_TOPIC, "hello", 5);
-    //OLED_Printf(0, 32, OLED_8X16, "MQTT LastData: %s", ESP_MQTT_LastData);
-    //OLED_Update();
-    HAL_Delay(10);
+    OTA_Client_Tick();   /* 主循环每帧调用一次，处理超时和收完后的校验 */
+    /* 临时调试：显示当前状态和错误码 */
+    OLED_ShowString(0,  48, "S:", OLED_6X8);
+    OLED_ShowChar (16, 48, '0' + g_ota_state, OLED_6X8);
+    OLED_ShowString(24, 48, "E:", OLED_6X8);
+    OLED_ShowChar (40, 48, '0' + g_ota_err,   OLED_6X8);
+    OLED_Update();
+    HAL_Delay(1);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */

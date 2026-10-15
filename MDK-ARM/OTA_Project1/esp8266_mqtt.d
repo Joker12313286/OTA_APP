@@ -33,4 +33,5 @@ ota_project1\esp8266_mqtt.o: D:\cxdownload\01 Keil c51v959-\02 Keil MDK\ARM\ARMC
 ota_project1\esp8266_mqtt.o: D:\cxdownload\01 Keil c51v959-\02 Keil MDK\ARM\ARMCC\Bin\..\include\stdlib.h
 ota_project1\esp8266_mqtt.o: ../BSP/OLED.h
 ota_project1\esp8266_mqtt.o: ../BSP/OLED_Data.h
+ota_project1\esp8266_mqtt.o: ..\OTA\OTA_Client.h
 ota_project1\esp8266_mqtt.o: ../Core/Inc/usart.h

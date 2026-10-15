@@ -9,7 +9,7 @@
 
 /*--------------------- 外部 Flash 固件存储位置 ---------------------*/
 #define OTA_FW_SIZE_ADDR       0X00000000          // 固件大小存储地址  大小0x00000000 ~ 0x00000003      4B
-#define OTA_FW_DOWNLOAD_ADDR   0X00000004          // 新固件地址        大小0x00000004 ~ 0x005FFFFF     6MB
+#define OTA_FW_DOWNLOAD_ADDR   0x00000100UL          // 新固件地址        大小0x00000100UL ~ 0x005FFFFF  5MB
 #define OTA_FW_BACKUP_ADDR     0X00600000          // 备份固件地址      大小0x00600000 ~ 0x007FEFFF     2MB-4KB
 #define OTA_FW_FLAG_ADDR       0x007ff000          // 固件标志地址      大小0x007ff000 ~ 0x007fffffff   4KB
 
